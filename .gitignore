@@ -1,0 +1,22 @@
+# Carter Skyers video stream media types
+# Ignore all raw media, shard, and temp files
+
+video/
+video_test/
+video_shards/
+temp/
+
+# Optional: ignore any mp4, mp3, and json files in case they appear elsewhere
+*.mp4
+*.mp3
+*.json
+
+# Python cache and virtual environment stuff
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.tmp
+venv/
+.env/
