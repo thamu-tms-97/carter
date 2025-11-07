@@ -56,7 +56,6 @@ def shake256_hash(s):
 
 
 def file_hash(file_path):
-
     try:
         file = open(file_path, 'rb')
     except Exception as e:
@@ -64,18 +63,11 @@ def file_hash(file_path):
             f'Unable to open {file_path} exception={type(e).__name__}')
         quit(-1)
 
-    # read the data
     byte_data = file.read()
-
-    # close file
     file.close()
 
-    # convert to string
     s = byte_data.decode('latin-1')
-
-    # calculate hash
     hash = shake256_hash(s)
-
     return hash
 
 
@@ -96,37 +88,34 @@ def probe(video_file_path):
 
 
 def temp_file_path(name, ext):
-    '''
-    creates a valid path to a temp file
-    '''
+    # Creates a valid path to a temp file
     if not os.path.exists(config.TEMP_DIR):
         os.makedirs(config.TEMP_DIR)
     hash = shake256_hash(name + str(time.time_ns()))
     temp_file_name = 'temp_' + name + '_' + hash + ext
-    temp_file_path = config.TEMP_DIR + '/' + temp_file_name
+    temp_file_path = os.path.join(config.TEMP_DIR, temp_file_name)
+    temp_file_path = temp_file_path.replace('\\', '/')
     return temp_file_path
 
 
 def audio(name, input_video_file_path, input_audio_file_path):
-    '''
-    adds audio back into file
-    '''
+    
+    # Adds audio back into file using ffmpeg
     print('Applying audio...')
     print(f'\tinput video file : {os.path.basename(input_video_file_path)}')
     print(f'\tinput audio file : {os.path.basename(input_audio_file_path)}')
     print(f'\tname             : {name}')
     print('\tstatus           : processing...', end='')
+
     video_file = ffmpeg.input(input_video_file_path)
     audio_file = ffmpeg.input(input_audio_file_path)
     output_file = temp_file_path(name, '.mp4')
 
-    # process
     (
         ffmpeg
-        # add audio back in to video
         .concat(video_file, audio_file, v=1, a=1)
         .output(output_file, loglevel='quiet')
-        .run()
+        .run(overwrite_output=True)
     )
 
     print('done')
@@ -135,17 +124,18 @@ def audio(name, input_video_file_path, input_audio_file_path):
 
 
 def concat(name, *input_video_file_paths):
-    '''
-    concatenates videos
-    '''
+    
+    # Concatenates multiple video files together
+    
     n = len(input_video_file_paths)
     if n == 0:
-        logger.error(
-            'Unable to concat videose because no videos were passed to concat')
+        logger.error('Unable to concat videos because no videos were passed')
         return None
+
     print('Applying concat...')
     print(f'\tinput       : {n} videos')
     video_files = []
+
     for i in range(n):
         input_video_file_path = input_video_file_paths[i]
         if not os.path.exists(input_video_file_path):
@@ -153,17 +143,16 @@ def concat(name, *input_video_file_paths):
             return None
         input = ffmpeg.input(input_video_file_path)
         video_files.append(input)
+
     print(f'\tname        : {name}')
     print('\tstatus      : processing...', end='')
     output_file = temp_file_path(name, '.mp4')
 
-    # process
     (
         ffmpeg
-        # add audio back in to video
         .concat(*video_files)
         .output(output_file, loglevel='quiet')
-        .run()
+        .run(overwrite_output=True)
     )
 
     print('done')
@@ -172,47 +161,45 @@ def concat(name, *input_video_file_paths):
 
 
 def play(file_path):
+    
+    # Plays a video file in VLC with proper Windows path handling
+    
+    import os, time, platform, vlc
+    from config import logger
 
-    # creating a vlc instance
-    vlc_instance = vlc.Instance()
+    file_path = os.path.abspath(file_path)
+    if not os.path.exists(file_path):
+        logger.error(f"Video file not found: {file_path}")
+        return
 
-    # creating a media player
-    player = vlc_instance.media_player_new()
-
-    # creating a media, prepend C: if on windows
     if platform.system() == 'Windows':
-        file_path = 'C:' + file_path
-    media = vlc_instance.media_new(file_path)
+        file_path = file_path.replace('\\', '/')
+        vlc_path = f"file:///{file_path}"
+    else:
+        vlc_path = file_path
 
-    # setting media to the player
+    logger.info(f"Playing video from: {vlc_path}")
+
+    os.environ["VLC_VERBOSE"] = "-1"
+
+    instance = vlc.Instance('--quiet', '--no-xlib', '--no-sub-autodetect-file')
+    player = instance.media_player_new()
+    media = instance.media_new_location(vlc_path)
     player.set_media(media)
 
-    params = {
-        'finish': False
-    }
+    player.play()
+    time.sleep(1.5)
 
-    # callbacks
-    events = player.event_manager()
-    events.event_attach(vlc.EventType.MediaPlayerEndReached,
-                        end_reached_cb, params)
-    events.event_attach(
-        vlc.EventType.MediaPlayerPositionChanged, position_changed_cb, player)
+    while True:
+        state = player.get_state()
+        if state in [vlc.State.Ended, vlc.State.Error]:
+            break
+        time.sleep(0.5)
 
-    # play until finished, if not testing
-    if 'PYTEST_CURRENT_TEST' not in os.environ:
-        player.play()
-        while not params['finish']:
-            time.sleep(0.5)
-
-        # getting the duration of the video
-        duration = player.get_length()
-
-        # printing the duration of the video
-        logger.info('Duration : ' + ms_to_timecode(duration))
+    logger.info("Playback completed successfully.")
 
 
 def clean_temp_directory():
-
     if os.path.exists(config.TEMP_DIR):
         for temp_file in os.listdir(config.TEMP_DIR):
             if isfile(join(config.TEMP_DIR, temp_file)):
@@ -220,38 +207,31 @@ def clean_temp_directory():
 
 
 def create_shard(input_file_path, output_file_path, start, end):
-
-    # get input video for ffmpeg
+    # Create a video shard between start and end seconds
+    
     input_file = ffmpeg.input(input_file_path)
-
-    # create output dir if needed
     dir = os.path.dirname(output_file_path)
     if not os.path.exists(dir):
         os.mkdir(dir)
 
-    # trim video
     start_time = ms_to_timecode(start*1000)
     end_time = ms_to_timecode(end*1000)
 
     logger.info(f'writing {output_file_path}')
     (
         ffmpeg
-        # trim
         .trim(input_file, start=start_time, end=end_time)
-        # reset start time code of video to 0
         .setpts('PTS-STARTPTS')
-        # output the file
         .output(output_file_path, loglevel='quiet')
         .run(overwrite_output=True)
     )
 
 
 def write(name, shard_data):
-    '''
-    writes the shard to disk as a mp4 video file
-    '''
-    output_file_path = temp_file_path(name, '.mp4')
 
+    # Writes a shard to disk as a temporary .mp4 file
+
+    output_file_path = temp_file_path(name, '.mp4')
     try:
         file = open(output_file_path, 'wb')
     except Exception as e:
@@ -259,10 +239,6 @@ def write(name, shard_data):
             f'Unable to open {output_file_path} exception={type(e).__name__}')
         quit(-1)
 
-    # write the data
     file.write(shard_data)
-
-    # close file
     file.close()
-
     return output_file_path
